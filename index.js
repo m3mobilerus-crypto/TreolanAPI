@@ -4,39 +4,33 @@ const cors = require('cors');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ================================================
-//  КОНФИГ — задаётся в Variables на Railway:
-//  TREOLAN_LOGIN    = твой логин от Treolan API
-//  TREOLAN_PASSWORD = твой пароль от Treolan API
-//  M3_VENDOR_ID     = ID M3 Mobile (спроси у Treolan, пока 0 = все)
-// ================================================
-const TREOLAN_BASE = 'https://b2b.treolan.ru/api/v1';  // боевой сервер
-const LOGIN       = process.env.TREOLAN_LOGIN    || '';
-const PASSWORD    = process.env.TREOLAN_PASSWORD || '';
-const M3_VENDOR   = process.env.M3_VENDOR_ID     || '0';
+const TREOLAN_BASE = 'https://b2b.treolan.ru/api/v1';
+const LOGIN        = process.env.TREOLAN_LOGIN    || '';
+const PASSWORD     = process.env.TREOLAN_PASSWORD || '';
+const M3_VENDOR    = process.env.M3_VENDOR_ID     || '0';
 
-// ================================================
-//  ТОКЕН — хранится в памяти, обновляется сам
-// ================================================
-let cachedToken   = null;
-let tokenExpires  = 0;
+// Токен в памяти
+let cachedToken  = null;
+let tokenExpires = 0;
 
 async function getToken() {
-  // Если токен ещё живой — возвращаем его
-  if (cachedToken && Date.now() < tokenExpires) {
-    return cachedToken;
+  if (cachedToken && Date.now() < tokenExpires) return cachedToken;
+
+  if (!LOGIN || !PASSWORD) {
+    throw new Error('TREOLAN_LOGIN и TREOLAN_PASSWORD не заданы в Variables');
   }
 
-  console.log('🔐 Получаю токен от Treolan...');
+  console.log('🔐 Получаю токен...');
 
-  // Пробуем разные варианты эндпоинта авторизации
   const authUrls = [
     '/Auth/GetToken',
     '/Auth/Login',
     '/Auth/Token',
+    '/Account/GetToken',
     '/Account/Login',
   ];
 
+  let lastError = '';
   for (const path of authUrls) {
     try {
       const res = await fetch(TREOLAN_BASE + path, {
@@ -45,30 +39,34 @@ async function getToken() {
         body: JSON.stringify({ login: LOGIN, password: PASSWORD })
       });
 
-      if (res.ok) {
-        const data = await res.json();
-        // Токен может быть в разных полях
-        const token = data.token || data.accessToken || data.access_token
-                   || data.bearerToken || data.jwt || data.result;
+      const text = await res.text();
+      console.log(`${path} → ${res.status}: ${text.slice(0, 100)}`);
 
-        if (token && typeof token === 'string') {
+      if (res.ok) {
+        let data;
+        try { data = JSON.parse(text); } catch { continue; }
+
+        const token = data.token || data.accessToken || data.access_token
+                   || data.bearerToken || data.jwt || data.result
+                   || (typeof data === 'string' ? data : null);
+
+        if (token && typeof token === 'string' && token.length > 10) {
           cachedToken  = token;
-          tokenExpires = Date.now() + 55 * 60 * 1000; // кэш 55 минут
+          tokenExpires = Date.now() + 55 * 60 * 1000;
           console.log(`✅ Токен получен через ${path}`);
           return token;
         }
       }
+      lastError = `${path} → ${res.status}`;
     } catch (e) {
-      // пробуем следующий вариант
+      lastError = `${path} → ${e.message}`;
+      console.log(`❌ ${lastError}`);
     }
   }
 
-  throw new Error('Не удалось получить токен. Проверь логин/пароль в Variables.');
+  throw new Error(`Не удалось получить токен. Последняя попытка: ${lastError}`);
 }
 
-// ================================================
-//  ХЕЛПЕР — запрос к Treolan с авто-авторизацией
-// ================================================
 async function treolan(method, path, body = null, params = null) {
   const token = await getToken();
   const url = new URL(TREOLAN_BASE + path);
@@ -76,19 +74,14 @@ async function treolan(method, path, body = null, params = null) {
 
   const options = {
     method,
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    }
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
   };
   if (body) options.body = JSON.stringify(body);
 
   const res = await fetch(url.toString(), options);
 
-  // Если токен протух — сбрасываем и повторяем один раз
   if (res.status === 401) {
-    console.log('🔄 Токен устарел, обновляю...');
-    cachedToken  = null;
+    cachedToken = null;
     tokenExpires = 0;
     return treolan(method, path, body, params);
   }
@@ -97,9 +90,6 @@ async function treolan(method, path, body = null, params = null) {
   return res.json();
 }
 
-// ================================================
-//  CORS — только твой сайт
-// ================================================
 app.use(cors({
   origin: [
     'https://m3-mobile.ru',
@@ -110,46 +100,41 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// ================================================
-//  ЭНДПОИНТЫ
-// ================================================
-
+// ── Документация
 app.get('/', (req, res) => {
   res.json({
     name: 'M3 Mobile × Treolan Proxy',
-    version: '2.0',
-    auth: 'auto (login/password → token)',
+    version: '3.0',
+    status: 'online',
     endpoints: {
-      'GET /api/ping':               'Проверка сервера',
-      'GET /api/catalog':            'Каталог M3 Mobile',
-      'GET /api/catalog?search=SL20':'Поиск по артикулу',
-      'GET /api/product/:articul':   'Товар + характеристики + фото',
+      'GET /api/ping':              'Проверка сервера',
+      'GET /api/auth-check':        'Проверка авторизации',
+      'GET /api/catalog':           'Каталог M3 Mobile',
+      'GET /api/catalog?search=X':  'Поиск по артикулу',
+      'GET /api/product/:articul':  'Товар + фото + характеристики',
     }
   });
 });
 
-// Проверка — работает без авторизации
+// ── Ping (без авторизации)
 app.get('/api/ping', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
-// Проверка авторизации
+// ── Проверка авторизации
 app.get('/api/auth-check', async (req, res) => {
   try {
     const token = await getToken();
-    res.json({ status: 'ok', tokenLength: token.length });
+    res.json({ status: 'ok', message: 'Авторизация успешна', tokenLength: token.length });
   } catch (e) {
-    res.status(401).json({ error: e.message });
+    res.status(401).json({ status: 'error', error: e.message });
   }
 });
 
-// ─────────────────────────────────────────────
-//  1. КАТАЛОГ — артикул, название, склад, транзит
-// ─────────────────────────────────────────────
+// ── Каталог
 app.get('/api/catalog', async (req, res) => {
   try {
     const { search } = req.query;
-
     const body = {
       category:  '',
       vendorid:  parseInt(M3_VENDOR),
@@ -164,44 +149,37 @@ app.get('/api/catalog', async (req, res) => {
 
     const data = await treolan('POST', '/Catalog/Get', body);
 
-    // Извлекаем позиции из дерева категорий
     const items = [];
     function extract(node, catName) {
       const name = node.name || catName || '';
       if (Array.isArray(node.positions)) {
         node.positions.forEach(p => items.push({
-          articul:     p.articul          || '',
-          name:        p.name             || '',
+          articul:     p.articul         || '',
+          name:        p.name            || '',
           category:    name,
-          stock:       p.quantity         || 0,
-          transit:     p.transitQuantity  || 0,
-          transitDate: p.transitDate      || null,
+          stock:       p.quantity        || 0,
+          transit:     p.transitQuantity || 0,
+          transitDate: p.transitDate     || null,
           available:   (p.quantity || 0) > 0,
         }));
       }
       if (Array.isArray(node.category)) node.category.forEach(c => extract(c, name));
       if (Array.isArray(node.children)) node.children.forEach(c => extract(c, name));
     }
-
     (data.categories || data.category || []).forEach(c => extract(c));
 
     res.json({ total: items.length, updated: new Date().toISOString(), items });
 
   } catch (e) {
     console.error('Catalog error:', e.message);
-    res.status(500).json({ error: 'Ошибка каталога', detail: e.message });
+    res.status(500).json({ error: e.message });
   }
 });
 
-// ─────────────────────────────────────────────
-//  2. ТОВАР — характеристики + фото
-// ─────────────────────────────────────────────
+// ── Товар
 app.get('/api/product/:articul', async (req, res) => {
   try {
-    const data = await treolan('GET', '/Catalog/GetProduct', null, {
-      articul: req.params.articul
-    });
-
+    const data = await treolan('GET', '/Catalog/GetProduct', null, { articul: req.params.articul });
     res.json({
       articul:     data.articul         || req.params.articul,
       name:        data.name            || '',
@@ -213,30 +191,29 @@ app.get('/api/product/:articul', async (req, res) => {
       photos:      extractPhotos(data),
       specs:       extractSpecs(data),
     });
-
   } catch (e) {
-    console.error('Product error:', e.message);
-    res.status(404).json({ error: 'Товар не найден', detail: e.message });
+    res.status(404).json({ error: e.message });
   }
 });
 
 function extractPhotos(d) {
-  if (Array.isArray(d.images))  return d.images.map(i => i.url || i.src || i).filter(Boolean);
-  if (Array.isArray(d.photos))  return d.photos.map(i => i.url || i.src || i).filter(Boolean);
+  if (Array.isArray(d.images)) return d.images.map(i => i.url || i.src || i).filter(Boolean);
+  if (Array.isArray(d.photos)) return d.photos.map(i => i.url || i.src || i).filter(Boolean);
   if (d.imageUrl) return [d.imageUrl];
   if (d.image)    return [d.image];
   return [];
 }
-
 function extractSpecs(d) {
-  if (Array.isArray(d.properties))  return d.properties.map(p => ({ name: p.name, value: p.value }));
-  if (Array.isArray(d.attributes))  return d.attributes.map(p => ({ name: p.name, value: p.value }));
-  if (Array.isArray(d.specs))       return d.specs;
+  if (Array.isArray(d.properties)) return d.properties.map(p => ({ name: p.name, value: p.value }));
+  if (Array.isArray(d.attributes)) return d.attributes.map(p => ({ name: p.name, value: p.value }));
+  if (Array.isArray(d.specs))      return d.specs;
   return [];
 }
 
+// ── Старт — НЕ падаем если нет логина
 app.listen(PORT, () => {
   console.log(`✅ M3 × Treolan Proxy запущен на порту ${PORT}`);
-  // Сразу получаем токен при старте
-  getToken().catch(e => console.error('⚠️ Авторизация:', e.message));
+  if (!LOGIN || !PASSWORD) {
+    console.log('⚠️  Добавь TREOLAN_LOGIN и TREOLAN_PASSWORD в Variables!');
+  }
 });
