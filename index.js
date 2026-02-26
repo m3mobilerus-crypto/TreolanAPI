@@ -40,14 +40,19 @@ async function getToken() {
 
   if (!res.ok) throw new Error(`Ошибка авторизации ${res.status}: ${text}`);
 
-  let data;
-  try { data = JSON.parse(text); } catch { throw new Error('Ответ не JSON: ' + text); }
+  // Treolan может вернуть токен как plain text или как JSON
+  let token = null;
+  try {
+    const data = JSON.parse(text);
+    token = data.token || data.accessToken || data.access_token
+          || data.bearerToken || data.jwt || data.result
+          || (typeof data === 'string' ? data : null);
+  } catch {
+    // Ответ — plain text, это и есть токен
+    token = text.trim().replace(/^"|"$/g, ''); // убираем кавычки если есть
+  }
 
-  const token = data.token || data.accessToken || data.access_token
-             || data.bearerToken || data.jwt || data.result
-             || (typeof data === 'string' ? data : null);
-
-  if (!token) throw new Error('Токен не найден в ответе: ' + text);
+  if (!token || token.length < 10) throw new Error('Токен не найден в ответе: ' + text);
 
   cachedToken  = token;
   tokenExpires = Date.now() + 55 * 60 * 1000; // 55 минут
