@@ -149,6 +149,29 @@ app.get('/api/auth-check', async (req, res) => {
   }
 });
 
+// ── DEBUG — сырой ответ от Treolan
+app.get('/api/debug', async (req, res) => {
+  try {
+    const token = await getToken();
+    const response = await fetch(`${TREOLAN_BASE}/Catalog/Get`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        category: '', vendorid: 0, keywords: '',
+        criterion: 'Contains', inArticul: true, inName: true,
+        inMark: false, showNc: 1, freeNom: true
+      })
+    });
+    const text = await response.text();
+    res.json({ httpStatus: response.status, preview: text.slice(0, 5000) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── Каталог M3 Mobile
 app.get('/api/catalog', async (req, res) => {
   try {
