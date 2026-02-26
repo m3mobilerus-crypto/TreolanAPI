@@ -153,7 +153,11 @@ app.get('/api/product/:articul', async (req, res) => {
     res.status(404).json({ error: e.message });
   }
 });
-
+app.get('/api/myip', async (req, res) => {
+  const r = await fetch('https://api.ipify.org?format=json');
+  const data = await r.json();
+  res.json(data);
+});
 function extractPhotos(d) {
   if (Array.isArray(d.images)) return d.images.map(i => i.url || i.src || i).filter(Boolean);
   if (Array.isArray(d.photos)) return d.photos.map(i => i.url || i.src || i).filter(Boolean);
