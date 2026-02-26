@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 3000;
 //  TREOLAN_TOKEN = Bearer токен из Postman коллекции
 //  M3_VENDOR_ID  = ID производителя M3 Mobile (0 = все)
 // ================================================
-const TREOLAN_BASE = 'https://b2b.treolan.ru/api/v1';
+const TREOLAN_BASE = 'https://api.treolan.ru/api/v1';
 const TOKEN        = process.env.TREOLAN_TOKEN || '';
 const M3_VENDOR    = process.env.M3_VENDOR_ID  || '0';
 
